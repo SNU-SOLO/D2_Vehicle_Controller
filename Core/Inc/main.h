@@ -72,6 +72,8 @@ void Error_Handler(void);
 #define RCC_OSC_IN_GPIO_Port GPIOF
 #define RCC_OSC_OUT_Pin GPIO_PIN_1
 #define RCC_OSC_OUT_GPIO_Port GPIOF
+#define TIM1_CH1_PULSEIN_Pin GPIO_PIN_0
+#define TIM1_CH1_PULSEIN_GPIO_Port GPIOC
 #define USART3_TX_GNSS_Pin GPIO_PIN_10
 #define USART3_TX_GNSS_GPIO_Port GPIOB
 #define USART3_RX_GNSS_Pin GPIO_PIN_11

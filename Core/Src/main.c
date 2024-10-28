@@ -50,12 +50,18 @@ typedef enum {
 
 
 // Blink interval for LED Test
-#define LED_BLINK_INTERVAL_POWER_OFF   1000  // 1초 간격
-#define LED_BLINK_INTERVAL_INIT_ECU    500   // 0.5초 간격
-#define LED_BLINK_INTERVAL_INIT_SYSTEM 200   // 0.2초 간격
-#define LED_BLINK_INTERVAL_FAILURE     100   // 0.1초 간격
-#define LED_BLINK_INTERVAL_MANUAL_DRIVE 300  // 0.3초 간격
-#define LED_BLINK_INTERVAL_CRUISE_DRIVE 800  // 0.8초 간격
+#define LED_BLINK_INTERVAL_POWER_OFF   1000  // 1�? 간격
+#define LED_BLINK_INTERVAL_INIT_ECU    500   // 0.5�? 간격
+#define LED_BLINK_INTERVAL_INIT_SYSTEM 200   // 0.2�? 간격
+#define LED_BLINK_INTERVAL_FAILURE     100   // 0.1�? 간격
+#define LED_BLINK_INTERVAL_MANUAL_DRIVE 300  // 0.3�? 간격
+#define LED_BLINK_INTERVAL_CRUISE_DRIVE 800  // 0.8�? 간격
+
+
+
+#define WHEEL_DIAMETER_MM 560    // wheel diameter(mm)
+#define PULSE_PER_ROTATION 48    // pulse per rotation
+#define TIMEOUT_THRESHOLD_MS 500 // Tiemout for velocity 0
 
 /* USER CODE END PD */
 
@@ -94,9 +100,12 @@ DMA_HandleTypeDef hdma_usart3_rx;
 uint8_t rxBuffer[RX_BUFFER_SIZE];
 uint8_t txBuffer[TX_BUFFER_SIZE];
 
-VehicleState currentState = STATE_POWER_OFF;  // 현재 상태 변수
+VehicleState currentState = STATE_POWER_OFF;  // ?��?�� ?��?�� �??��
 uint32_t ledBlinkInterval = LED_BLINK_INTERVAL_POWER_OFF; // for LED Test
 
+// Capture Timer and timeout counter variable
+volatile uint32_t captureValue = 0;    // capture value
+volatile uint32_t timeoutCounter = 0;  // timeout counter
 
 
 
@@ -136,6 +145,15 @@ void handleCruiseDriveState(void);
 
 // stateMachine Update
 void stateMachineUpdate(void);
+
+
+// cruise related private function prototype
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim);  // Timer Input Capture ?��?��?��?�� 콜백 ?��?��
+void checkTimeout(void);                                   // ???��?��?�� 체크 ?��?��
+float getVelocity(void);                                   // ?��?�� 계산 ?��?��
+void initPWM(void);
+void setPWMDutyCycle(uint16_t duty);
+
 
 
 /* USER CODE END PFP */
@@ -213,6 +231,14 @@ int main(void)
   /* -- Sample board code to switch on led ---- */
   BSP_LED_On(LED_GREEN); // test code
 
+  //start over velocity measurement
+  HAL_TIM_IC_Start_IT(&htim1, TIM_CHANNEL_1);
+  printf("Starting velocity measurement...\r\n");
+
+  //init PWM
+  initPWM();
+  setPWMDutyCycle(50);
+
   /* USER CODE END BSP */
 
   /* Infinite loop */
@@ -221,9 +247,16 @@ int main(void)
   {
 
     /* USER CODE END WHILE */
+      // 듀티 사이클을 0%, 50%, 100% 순서로 변경
+      setPWMDutyCycle(0);   // 0%
+      HAL_Delay(1000);
 
-	  // stateMachine update
-	  stateMachineUpdate();
+      setPWMDutyCycle(50);  // 50%
+      HAL_Delay(1000);
+
+      setPWMDutyCycle(100); // 100%
+      HAL_Delay(1000);
+
 
     /* USER CODE BEGIN 3 */
   }
@@ -603,6 +636,7 @@ static void MX_TIM1_Init(void)
   /* USER CODE END TIM1_Init 0 */
 
   TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_IC_InitTypeDef sConfigIC = {0};
   TIM_OC_InitTypeDef sConfigOC = {0};
   TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
 
@@ -610,12 +644,16 @@ static void MX_TIM1_Init(void)
 
   /* USER CODE END TIM1_Init 1 */
   htim1.Instance = TIM1;
-  htim1.Init.Prescaler = 0;
+  htim1.Init.Prescaler = 16999;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim1.Init.Period = 65535;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_IC_Init(&htim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
   if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)
   {
     Error_Handler();
@@ -627,6 +665,14 @@ static void MX_TIM1_Init(void)
   {
     Error_Handler();
   }
+  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
+  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
+  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
+  sConfigIC.ICFilter = 0;
+  if (HAL_TIM_IC_ConfigChannel(&htim1, &sConfigIC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
   sConfigOC.Pulse = 0;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
@@ -634,10 +680,6 @@ static void MX_TIM1_Init(void)
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
   sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
   sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
-  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
-    Error_Handler();
-  }
   if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
   {
     Error_Handler();
@@ -685,9 +727,9 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 0;
+  htim2.Init.Prescaler = 1699;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 4294967295;
+  htim2.Init.Period = 4999;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
@@ -1109,6 +1151,53 @@ void handleCruiseDriveState(void)
     ledBlinkInterval = LED_BLINK_INTERVAL_CRUISE_DRIVE;
 }
 
+// Timer Input Capture
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
+    if (htim->Instance == TIM1) {  // TIM1?��?�� 발생?�� ?��?��?��?��?���? ?��?��
+        captureValue = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);  // 캡처?�� ???���? �?
+        timeoutCounter = 0;  //
+    }
+}
+
+// 주기?��?���? ?��출되?�� ???��?��?�� 체크 ?��?�� (?��: ???���? ?��?�� 루프?��?�� 주기?��?���? ?���?)
+void checkTimeout(void) {
+    if (++timeoutCounter >= TIMEOUT_THRESHOLD_MS) {
+        captureValue = 0;  //
+    }
+}
+
+// ?��?�� 계산 ?��?��
+float getVelocity(void) {
+    // 캡처된 값이 0이면 속도 0으로 반환
+    if (captureValue == 0) {
+        return 0.0f;
+    }
+
+    float timerClockFrequency = HAL_RCC_GetPCLK2Freq();  // TIM1의 클럭 (단위: Hz)
+    float prescaler = htim1.Init.Prescaler + 1;          // Prescaler 설정
+
+    // 한 회전당 시간 (초 단위)
+    float timePerRotation = (captureValue * prescaler) / timerClockFrequency;
+
+    // 이동 거리: 1회전당 1.76m
+    float distancePerRotation = (3.14159f * WHEEL_DIAMETER_MM) / 1000.0f;  // 단위: m
+
+    // 속도 = 거리 / 시간 (m/s)
+    float velocity = distancePerRotation / timePerRotation;
+
+    return velocity;
+}
+
+
+void initPWM(void) {
+	HAL_TIMEx_PWMN_Start(&htim1, TIM_CHANNEL_1);
+}
+
+void setPWMDutyCycle(uint16_t duty) {
+	if (duty > 100) duty = 100; 					     // set range duty
+	uint32_t pulse = (4999 * duty) / 100;			     // compare duty cycle
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pulse); // compare duty cycle
+}
 
 
 
