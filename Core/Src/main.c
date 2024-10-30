@@ -50,18 +50,21 @@ typedef enum {
 
 
 // Blink interval for LED Test
-#define LED_BLINK_INTERVAL_POWER_OFF   1000  // 1�? 간격
-#define LED_BLINK_INTERVAL_INIT_ECU    500   // 0.5�? 간격
-#define LED_BLINK_INTERVAL_INIT_SYSTEM 200   // 0.2�? 간격
-#define LED_BLINK_INTERVAL_FAILURE     100   // 0.1�? 간격
-#define LED_BLINK_INTERVAL_MANUAL_DRIVE 300  // 0.3�? 간격
-#define LED_BLINK_INTERVAL_CRUISE_DRIVE 800  // 0.8�? 간격
+#define LED_BLINK_INTERVAL_POWER_OFF   1000  // 1�??? 간격
+#define LED_BLINK_INTERVAL_INIT_ECU    500   // 0.5�??? 간격
+#define LED_BLINK_INTERVAL_INIT_SYSTEM 200   // 0.2�??? 간격
+#define LED_BLINK_INTERVAL_FAILURE     100   // 0.1�??? 간격
+#define LED_BLINK_INTERVAL_MANUAL_DRIVE 300  // 0.3�??? 간격
+#define LED_BLINK_INTERVAL_CRUISE_DRIVE 800  // 0.8�??? 간격
 
 
 
 #define WHEEL_DIAMETER_MM 560    // wheel diameter(mm)
 #define PULSE_PER_ROTATION 48    // pulse per rotation
 #define TIMEOUT_THRESHOLD_MS 500 // Tiemout for velocity 0
+
+
+#define VCP_UART &hcom_uart[COM1] // vpc uart port number
 
 /* USER CODE END PD */
 
@@ -100,7 +103,7 @@ DMA_HandleTypeDef hdma_usart3_rx;
 uint8_t rxBuffer[RX_BUFFER_SIZE];
 uint8_t txBuffer[TX_BUFFER_SIZE];
 
-VehicleState currentState = STATE_POWER_OFF;  // ?��?�� ?��?�� �??��
+VehicleState currentState = STATE_POWER_OFF;  // ?��?�� ?��?�� �????��
 uint32_t ledBlinkInterval = LED_BLINK_INTERVAL_POWER_OFF; // for LED Test
 
 // Capture Timer and timeout counter variable
@@ -154,6 +157,8 @@ float getVelocity(void);                                   // ?��?�� 계
 void initPWM(void);
 void setPWMDutyCycle(uint16_t duty);
 
+// serial print for debug
+void UART_SendMessage(char *message);
 
 
 /* USER CODE END PFP */
@@ -224,7 +229,7 @@ int main(void)
   }
 
   /* USER CODE BEGIN BSP */
-
+  char msg[] = "Hello, This is Test Text \r\n";
   /* -- Sample board code to send message over COM1 port ---- */
   printf("Welcome to STM32 world !\n\r"); // test code
 
@@ -232,12 +237,16 @@ int main(void)
   BSP_LED_On(LED_GREEN); // test code
 
   //start over velocity measurement
-  HAL_TIM_IC_Start_IT(&htim1, TIM_CHANNEL_1);
+  HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_1);
   printf("Starting velocity measurement...\r\n");
 
   //init PWM
   initPWM();
   setPWMDutyCycle(50);
+
+  //init PWM to DC Output
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_SET);
 
   /* USER CODE END BSP */
 
@@ -247,17 +256,21 @@ int main(void)
   {
 
     /* USER CODE END WHILE */
-      // 듀티 사이클을 0%, 50%, 100% 순서로 변경
-      setPWMDutyCycle(0);   // 0%
-      HAL_Delay(1000);
+    setPWMDutyCycle(0);   // 0%
+    HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);  // PA5 핀 토글
+    UART_SendMessage("Duty is 0% \r\n");
+    //HAL_UART_Transmit(&hcom_uart[COM1], (uint8_t*)msg, sizeof(msg) -1, 1000);
+    HAL_Delay(1000);
 
-      setPWMDutyCycle(50);  // 50%
-      HAL_Delay(1000);
+    setPWMDutyCycle(50);  // 50%
+    UART_SendMessage("Duty is 50% \r\n");
+    //HAL_UART_Transmit(&hcom_uart[COM1], (uint8_t*)msg, sizeof(msg) -1, 1000);
+    HAL_Delay(1000);
 
-      setPWMDutyCycle(100); // 100%
-      HAL_Delay(1000);
-
-
+    setPWMDutyCycle(100); // 100%
+    //HAL_UART_Transmit(&hcom_uart[COM1], (uint8_t*)msg, sizeof(msg) -1, 1000);
+    UART_SendMessage("Duty is 100% \r\n");
+    HAL_Delay(1000);
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
@@ -727,7 +740,7 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 1699;
+  htim2.Init.Prescaler = 169;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Period = 4999;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -1153,13 +1166,13 @@ void handleCruiseDriveState(void)
 
 // Timer Input Capture
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
-    if (htim->Instance == TIM1) {  // TIM1?��?�� 발생?�� ?��?��?��?��?���? ?��?��
-        captureValue = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);  // 캡처?�� ???���? �?
+    if (htim->Instance == TIM1) {  // TIM1?��?�� 발생?�� ?��?��?��?��?���??? ?��?��
+        captureValue = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);  // 캡처?�� ???���??? �???
         timeoutCounter = 0;  //
     }
 }
 
-// 주기?��?���? ?��출되?�� ???��?��?�� 체크 ?��?�� (?��: ???���? ?��?�� 루프?��?�� 주기?��?���? ?���?)
+// 주기?��?���??? ?��출되?�� ???��?��?�� 체크 ?��?�� (?��: ???���??? ?��?�� 루프?��?�� 주기?��?���??? ?���???)
 void checkTimeout(void) {
     if (++timeoutCounter >= TIMEOUT_THRESHOLD_MS) {
         captureValue = 0;  //
@@ -1168,21 +1181,21 @@ void checkTimeout(void) {
 
 // ?��?�� 계산 ?��?��
 float getVelocity(void) {
-    // 캡처된 값이 0이면 속도 0으로 반환
+    // 캡처?�� 값이 0?���?? ?��?�� 0?���?? 반환
     if (captureValue == 0) {
         return 0.0f;
     }
 
-    float timerClockFrequency = HAL_RCC_GetPCLK2Freq();  // TIM1의 클럭 (단위: Hz)
-    float prescaler = htim1.Init.Prescaler + 1;          // Prescaler 설정
+    float timerClockFrequency = HAL_RCC_GetPCLK2Freq();  // TIM1?�� ?��?�� (?��?��: Hz)
+    float prescaler = htim1.Init.Prescaler + 1;          // Prescaler ?��?��
 
-    // 한 회전당 시간 (초 단위)
+    // ?�� ?��?��?�� ?���?? (�?? ?��?��)
     float timePerRotation = (captureValue * prescaler) / timerClockFrequency;
 
-    // 이동 거리: 1회전당 1.76m
-    float distancePerRotation = (3.14159f * WHEEL_DIAMETER_MM) / 1000.0f;  // 단위: m
+    // ?��?�� 거리: 1?��?��?�� 1.76m
+    float distancePerRotation = (3.14159f * WHEEL_DIAMETER_MM) / 1000.0f;  // ?��?��: m
 
-    // 속도 = 거리 / 시간 (m/s)
+    // ?��?�� = 거리 / ?���?? (m/s)
     float velocity = distancePerRotation / timePerRotation;
 
     return velocity;
@@ -1195,9 +1208,16 @@ void initPWM(void) {
 
 void setPWMDutyCycle(uint16_t duty) {
 	if (duty > 100) duty = 100; 					     // set range duty
+
 	uint32_t pulse = (4999 * duty) / 100;			     // compare duty cycle
 	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pulse); // compare duty cycle
 }
+
+void UART_SendMessage(char *message) {
+    HAL_UART_Transmit(&hcom_uart[COM1], (uint8_t*)message, strlen(message), HAL_MAX_DELAY);
+
+}
+
 
 
 
