@@ -21,7 +21,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "stdbool.h"
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -37,6 +38,12 @@ typedef enum {
     STATE_CRUISE_DRIVE
 } VehicleState;
 
+typedef struct {
+	uint32_t id;
+	uint8_t data[8];
+	uint8_t dlc;
+} CANMessage;
+
 
 /* USER CODE END PTD */
 
@@ -50,12 +57,12 @@ typedef enum {
 
 
 // Blink interval for LED Test
-#define LED_BLINK_INTERVAL_POWER_OFF   1000  // 1�??? 간격
-#define LED_BLINK_INTERVAL_INIT_ECU    500   // 0.5�??? 간격
-#define LED_BLINK_INTERVAL_INIT_SYSTEM 200   // 0.2�??? 간격
-#define LED_BLINK_INTERVAL_FAILURE     100   // 0.1�??? 간격
-#define LED_BLINK_INTERVAL_MANUAL_DRIVE 300  // 0.3�??? 간격
-#define LED_BLINK_INTERVAL_CRUISE_DRIVE 800  // 0.8�??? 간격
+#define LED_BLINK_INTERVAL_POWER_OFF   1000  // 1.0s
+#define LED_BLINK_INTERVAL_INIT_ECU    500   // 0.5s
+#define LED_BLINK_INTERVAL_INIT_SYSTEM 200   // 0.2s
+#define LED_BLINK_INTERVAL_FAILURE     100   // 0.1s
+#define LED_BLINK_INTERVAL_MANUAL_DRIVE 300  // 0.3s
+#define LED_BLINK_INTERVAL_CRUISE_DRIVE 800  // 0.8s
 
 
 
@@ -65,6 +72,16 @@ typedef enum {
 
 
 #define VCP_UART &hcom_uart[COM1] // vpc uart port number
+
+// Switch Debouncing time
+#define DEBOUNCE_DELAY 50 // 50ms
+
+
+
+// CAN Message
+#define MAX_CAN_MESSAGES 42  // max can message to receive
+#define UART_SEND_INTERVAL	100 // UART transmission period for CAN Message serial print
+
 
 /* USER CODE END PD */
 
@@ -103,13 +120,22 @@ DMA_HandleTypeDef hdma_usart3_rx;
 uint8_t rxBuffer[RX_BUFFER_SIZE];
 uint8_t txBuffer[TX_BUFFER_SIZE];
 
-VehicleState currentState = STATE_POWER_OFF;  // ?��?�� ?��?�� �????��
-uint32_t ledBlinkInterval = LED_BLINK_INTERVAL_POWER_OFF; // for LED Test
+VehicleState currentState = STATE_POWER_OFF;  // initial state
+uint32_t ledBlinkInterval = LED_BLINK_INTERVAL_POWER_OFF; // LED blink interval
 
 // Capture Timer and timeout counter variable
 volatile uint32_t captureValue = 0;    // capture value
 volatile uint32_t timeoutCounter = 0;  // timeout counter
 
+// Last Button pressed time
+uint32_t lastButtonPressTime = 0; // for save last button pressed time
+CANMessage canMessages[MAX_CAN_MESSAGES]; // CAN message buffer
+uint8_t canMessageCount = 0;   // current message count
+uint32_t lastUartSendTime = 0; // last UART transmission time
+
+
+// test variable
+uint8_t xTest = 0;
 
 
 /* USER CODE END PV */
@@ -149,16 +175,25 @@ void handleCruiseDriveState(void);
 // stateMachine Update
 void stateMachineUpdate(void);
 
+// state transitions
+void changeVehcielState(VehicleState newState);
+
+// detect button pushed event
+int isModeSwitchPushed(void);
 
 // cruise related private function prototype
-void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim);  // Timer Input Capture ?��?��?��?�� 콜백 ?��?��
-void checkTimeout(void);                                   // ???��?��?�� 체크 ?��?��
-float getVelocity(void);                                   // ?��?�� 계산 ?��?��
-void initPWM(void);
-void setPWMDutyCycle(uint16_t duty);
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim);  // Timer Input Capture callback
+void checkTimeout(void);                                   // TimeoutCheck
+float getVelocity(void);                                   // Get velocity
+void initPWM(void);										   // initPWM
+void setPWMDutyCycle(uint16_t duty);					   // setPWMDutyCycle
 
 // serial print for debug
-void UART_SendMessage(char *message);
+void UART_SendMessage(char *message);						//UART print via VCP
+
+
+// CAN RX callback
+void processCanMessages(void);
 
 
 /* USER CODE END PFP */
@@ -211,6 +246,9 @@ int main(void)
   MX_TIM1_Init();
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
+  HAL_FDCAN_Start(&hfdcan1); // start over CAN
+  HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);  // RX ?��?��?��?�� ?��?��?��
+  // RX int activate
 
   /* USER CODE END 2 */
 
@@ -230,8 +268,7 @@ int main(void)
 
   /* USER CODE BEGIN BSP */
   char msg[] = "Hello, This is Test Text \r\n";
-  /* -- Sample board code to send message over COM1 port ---- */
-  printf("Welcome to STM32 world !\n\r"); // test code
+  UART_SendMessage(msg);
 
   /* -- Sample board code to switch on led ---- */
   BSP_LED_On(LED_GREEN); // test code
@@ -253,26 +290,30 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
-  {
+    {
+      /* USER CODE END WHILE */
+      processCanMessages(); // transmit CAN messate to UART serial
+      /*// test code for PWM output
+      setPWMDutyCycle(0);   // 0%
+      HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);  // PA5 핀 토글
+      UART_SendMessage("Duty is 0% \r\n");
+      //HAL_UART_Transmit(&hcom_uart[COM1], (uint8_t*)msg, sizeof(msg) -1, 1000);
+      HAL_Delay(1000);
 
-    /* USER CODE END WHILE */
-    setPWMDutyCycle(0);   // 0%
-    HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);  // PA5 핀 토글
-    UART_SendMessage("Duty is 0% \r\n");
-    //HAL_UART_Transmit(&hcom_uart[COM1], (uint8_t*)msg, sizeof(msg) -1, 1000);
-    HAL_Delay(1000);
+      setPWMDutyCycle(50);  // 50%
+      UART_SendMessage("Duty is 50% \r\n");
+      //HAL_UART_Transmit(&hcom_uart[COM1], (uint8_t*)msg, sizeof(msg) -1, 1000);
+      HAL_Delay(1000);
 
-    setPWMDutyCycle(50);  // 50%
-    UART_SendMessage("Duty is 50% \r\n");
-    //HAL_UART_Transmit(&hcom_uart[COM1], (uint8_t*)msg, sizeof(msg) -1, 1000);
-    HAL_Delay(1000);
+      setPWMDutyCycle(100); // 100%
+      //HAL_UART_Transmit(&hcom_uart[COM1], (uint8_t*)msg, sizeof(msg) -1, 1000);
+      UART_SendMessage("Duty is 100% \r\n");
+      HAL_Delay(1000);
+      */
 
-    setPWMDutyCycle(100); // 100%
-    //HAL_UART_Transmit(&hcom_uart[COM1], (uint8_t*)msg, sizeof(msg) -1, 1000);
-    UART_SendMessage("Duty is 100% \r\n");
-    HAL_Delay(1000);
-    /* USER CODE BEGIN 3 */
-  }
+
+      /* USER CODE BEGIN 3 */
+    }
   /* USER CODE END 3 */
 }
 
@@ -1078,126 +1119,185 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
-void stateMachineUpdate(void)
-{
-	switch (currentState)
-	{
+void stateMachineUpdate(void) {
+    switch (currentState) {
+        case STATE_POWER_OFF:
+            handlePowerOffState();
+            changeVehicleState(STATE_INIT_ECU);
+            break;
 
-		case STATE_POWER_OFF:
-			handlePowerOffState();
+        case STATE_INIT_ECU:
+            handleInitECUState();
+            changeVehicleState(STATE_INIT_SYSTEM);
+            break;
 
-
-		case STATE_INIT_ECU:
-			//entry
-
-			//do
-			handleInitECUState();
-
-			//exit
-			break;
-		case STATE_INIT_SYSTEM:
-			//entry
-
-			//do
+        case STATE_INIT_SYSTEM:
             handleInitSystemState();
+            if (isInitSuccess()) {
+                changeVehicleState(STATE_MANUAL_DRIVE);
+            }
+            break;
 
-			//exit
-
-			break;
-		case STATE_FAILURE:
-			//entry
-
-			//do
+        case STATE_FAILURE:
             handleFailureState();
+            break;
 
-			//exit
-			break;
-		case STATE_MANUAL_DRIVE:
-			//entry
-
-			//do
+        case STATE_MANUAL_DRIVE:
             handleManualDriveState();
 
-			//exit
 
-			break;
-		case STATE_CRUISE_DRIVE:
-			//entry
+            // specify transition condition to next state
+            if (isModeSwitchPushed()) {
+                changeVehicleState(STATE_CRUISE_DRIVE);
+            }
+            break;
 
-			//do
-
+        case STATE_CRUISE_DRIVE:
             handleCruiseDriveState();
 
 
-            //exit
+            // specify transition condition to next state
+            if (isModeSwitchPushed()) {
+                changeVehicleState(STATE_MANUAL_DRIVE);
+            }
+            break;
 
-			break;
-
-		default:
-			currentState = STATE_FAILURE;
-			break;
-	}
+        default:
+            currentState = STATE_POWER_OFF;
+            break;
+    }
 }
+
+void changeVehicleState(VehicleState newState) {
+    switch (currentState) {
+        case STATE_POWER_OFF:
+        	/* exit activity */
+        	// dummy activity
+        	xTest = 1;
+        	break;
+        case STATE_INIT_ECU:
+        	/* exit activity */
+        	xTest = 1;
+        	break;
+        case STATE_INIT_SYSTEM:
+        	/* exit activity */
+        	xTest = 1;
+        	break;
+        case STATE_FAILURE:
+        	/* exit activity */
+        	xTest = 1;
+        	break;
+        case STATE_MANUAL_DRIVE:
+        	/* exit activity */
+        	xTest = 1;
+        	break;
+        case STATE_CRUISE_DRIVE:
+        	/* exit activity */
+        	xTest = 1;
+        	break;
+    }
+
+    switch (newState) {
+        case STATE_POWER_OFF:
+        	/* entry activity */
+        	xTest = 1;
+        	break;
+        case STATE_INIT_ECU:
+        	/* entry activity */
+        	xTest = 1;
+        	break;
+        case STATE_INIT_SYSTEM:
+        	/* entry activity */
+        	xTest = 1;
+        	break;
+        case STATE_FAILURE:
+        	/* entry activity */
+        	xTest = 1;
+        	break;
+        case STATE_MANUAL_DRIVE:
+        	/* entry activity */
+        	xTest = 1;
+        	break;
+        case STATE_CRUISE_DRIVE:
+        	/* entry activity */
+        	xTest = 1;
+        	break;
+    }
+
+    currentState = newState;
+}
+
 
 void handlePowerOffState(void)
 {
+	// DO activity
     ledBlinkInterval = LED_BLINK_INTERVAL_POWER_OFF;
+
 }
 void handleInitECUState(void)
 {
+	// DO activity
     ledBlinkInterval = LED_BLINK_INTERVAL_INIT_ECU;
 }
 void handleInitSystemState(void)
 {
+	// DO activity
     ledBlinkInterval = LED_BLINK_INTERVAL_INIT_SYSTEM;
 }
 void handleFailureState(void)
 {
+	// DO activity
     ledBlinkInterval = LED_BLINK_INTERVAL_FAILURE;
 }
 void handleManualDriveState(void)
 {
+	// DO activity
     ledBlinkInterval = LED_BLINK_INTERVAL_MANUAL_DRIVE;
 }
 void handleCruiseDriveState(void)
 {
+	// DO activity
     ledBlinkInterval = LED_BLINK_INTERVAL_CRUISE_DRIVE;
+}
+
+int isModeSwitchPushed(void) {				//button pushed event detection
+    uint32_t currentTime = HAL_GetTick();  // get current time
+    GPIO_PinState buttonState = HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13);  // Read button pin
+
+    // if button is pushed, and timer is expired then fire.
+    if (buttonState == GPIO_PIN_RESET && (currentTime - lastButtonPressTime) >= DEBOUNCE_DELAY) {
+        lastButtonPressTime = currentTime;  // update last time
+        return 1;  // return Pushed event is true
+    }
+
+    return 0;  // return pushed event is false
 }
 
 // Timer Input Capture
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
-    if (htim->Instance == TIM1) {  // TIM1?��?�� 발생?�� ?��?��?��?��?���??? ?��?��
-        captureValue = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);  // 캡처?�� ???���??? �???
+    if (htim->Instance == TIM1) {  //
+        captureValue = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);  //
         timeoutCounter = 0;  //
     }
 }
 
-// 주기?��?���??? ?��출되?�� ???��?��?�� 체크 ?��?�� (?��: ???���??? ?��?�� 루프?��?�� 주기?��?���??? ?���???)
+// CheckTimeout Threshold
 void checkTimeout(void) {
     if (++timeoutCounter >= TIMEOUT_THRESHOLD_MS) {
         captureValue = 0;  //
     }
 }
 
-// ?��?�� 계산 ?��?��
+// Get velocity calcluating
 float getVelocity(void) {
-    // 캡처?�� 값이 0?���?? ?��?�� 0?���?? 반환
     if (captureValue == 0) {
         return 0.0f;
     }
-
-    float timerClockFrequency = HAL_RCC_GetPCLK2Freq();  // TIM1?�� ?��?�� (?��?��: Hz)
-    float prescaler = htim1.Init.Prescaler + 1;          // Prescaler ?��?��
-
-    // ?�� ?��?��?�� ?���?? (�?? ?��?��)
+    float timerClockFrequency = HAL_RCC_GetPCLK2Freq();
+    float prescaler = htim1.Init.Prescaler + 1;
     float timePerRotation = (captureValue * prescaler) / timerClockFrequency;
-
-    // ?��?�� 거리: 1?��?��?�� 1.76m
-    float distancePerRotation = (3.14159f * WHEEL_DIAMETER_MM) / 1000.0f;  // ?��?��: m
-
-    // ?��?�� = 거리 / ?���?? (m/s)
+    float distancePerRotation = (3.14159f * WHEEL_DIAMETER_MM) / 1000.0f;
     float velocity = distancePerRotation / timePerRotation;
-
     return velocity;
 }
 
@@ -1218,6 +1318,50 @@ void UART_SendMessage(char *message) {
 
 }
 
+//can message RX callback
+void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs) {
+    FDCAN_RxHeaderTypeDef rxHeader;
+    uint8_t rxData[8];
+
+    // FDCAN 메시지 수신
+    if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK) {
+        // 수신한 메시지를 버퍼에 저장
+        if (canMessageCount < MAX_CAN_MESSAGES) {
+            canMessages[canMessageCount].id = rxHeader.Identifier;
+            canMessages[canMessageCount].dlc = rxHeader.DataLength >> 16;
+            memcpy(canMessages[canMessageCount].data, rxData, canMessages[canMessageCount].dlc);
+            canMessageCount++;
+        }
+    }
+}
+
+
+///can message to UART
+void processCanMessages(void) {
+    uint32_t currentTime = HAL_GetTick();
+
+    if ((currentTime - lastUartSendTime) >= UART_SEND_INTERVAL) {
+        lastUartSendTime = currentTime;
+
+        for (uint8_t i = 0; i < canMessageCount; i++) {
+            // �? CAN 메시�?�? UART�? 출력
+            char msg[100];
+            snprintf(msg, sizeof(msg), "CAN ID: 0x%X DLC: %d Data:", canMessages[i].id, canMessages[i].dlc);
+            HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+
+            for (uint8_t j = 0; j < canMessages[i].dlc; j++) {
+                snprintf(msg, sizeof(msg), " %02X", canMessages[i].data[j]);
+                HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+            }
+
+            snprintf(msg, sizeof(msg), "\r\n");
+            HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+        }
+
+        // 메시�? 버퍼 초기?��
+        canMessageCount = 0;
+    }
+}
 
 
 
