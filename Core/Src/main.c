@@ -30,7 +30,7 @@
 /* USER CODE BEGIN PTD */
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
-typedef enum {
+typedef enum {    // FSM State
     STATE_POWER_OFF,
     STATE_INIT_ECU,
     STATE_INIT_SYSTEM,
@@ -39,7 +39,7 @@ typedef enum {
     STATE_CRUISE_DRIVE
 } VehicleState;
 
-typedef struct {
+typedef struct {	// CanMessage
 	uint32_t id;
 	uint8_t data[8];
 	uint8_t dlc;
@@ -177,16 +177,16 @@ void handleCruiseDriveState(void);
 void stateMachineUpdate(void);
 
 // state transitions
-void changeVehcielState(VehicleState newState);
+void changeVehcielState(VehicleState newState);			   // Func for State Machine transition
 
 // detect button pushed event
-int isModeSwitchPushed(void);
+int isModeSwitchPushed(void);							   // Mode Switch Pushed event
 
 // cruise related private function prototype
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim);  // Timer Input Capture callback
-void checkTimeout(void);                                   // TimeoutCheck
+void checkTimeout(void);                                   // Timeout Check
 float getVelocity(void);                                   // Get velocity
-void initPWM(void);										   // initPWM
+void initPWM(void);										   // init Acceleration volume
 void setPWMDutyCycle(uint16_t duty);					   // setPWMDutyCycle
 
 // serial print for debug
@@ -194,7 +194,7 @@ void UART_SendMessage(char *message);						//UART print via VCP
 
 
 // CAN RX callback
-void processCanMessages(void);
+void processCanMessages(void);								// Rx FIFO0 CAN message
 
 
 /* USER CODE END PFP */
@@ -259,6 +259,7 @@ int main(void)
   BSP_LED_Init(LED_GREEN);
 
   /* Initialize COM1 port (115200, 8 bits (7-bit data + 1 stop bit), no parity */
+  // virtual port VCP UART initial setting
   BspCOMInit.BaudRate   = 115200;
   BspCOMInit.WordLength = COM_WORDLENGTH_8B;
   BspCOMInit.StopBits   = COM_STOPBITS_1;
@@ -270,7 +271,7 @@ int main(void)
   }
 
   /* USER CODE BEGIN BSP */
-  char msg[] = "Hello, This is Test Text \r\n";
+  char msg[] = "Hello, This is Test Text \r\n"; //print test message to VCP
   UART_SendMessage(msg);
 
   /* -- Sample board code to switch on led ---- */
@@ -281,12 +282,12 @@ int main(void)
   printf("Starting velocity measurement...\r\n");
 
   //init PWM
-  initPWM();
-  setPWMDutyCycle(50);
+  initPWM();							//Init for PWM duty
+  setPWMDutyCycle(0);					// initial PWM Duty = 0%
 
   //init PWM to DC Output
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);		// switch on PWM Output Enable
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_SET);		// switch on MUX Select switch
 
   /* USER CODE END BSP */
 
@@ -297,6 +298,8 @@ int main(void)
       /* USER CODE END WHILE */
       processCanMessages(); // transmit CAN messate to UART serial
       HAL_Delay(100);
+
+
       /*// test code for PWM output
       setPWMDutyCycle(0);   // 0%
       HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);  // PA5 핀 토글
@@ -1351,12 +1354,12 @@ void processCanMessages(void) {
             char msg[128];
 
             // 메시지 헤더 출력
-            snprintf(msg, sizeof(msg), "CAN ID: 0x%03lX, DLC: %d, Data:", canMessages[i].id, canMessages[i].dlc);
+            snprintf(msg, sizeof(msg), "CAN ID: 0x%03lX, DLC: %d, Data:", canMessages[i].id, canMessages[i].dlc); // Data formatting
             UART_SendMessage(msg);
 
             // 데이터 출력
             for (uint8_t j = 0; j < canMessages[i].dlc; j++) {
-                snprintf(msg, sizeof(msg), " %02X", canMessages[i].data[j]);
+                snprintf(msg, sizeof(msg), " %02X", canMessages[i].data[j]);			// data formatting : msg, size,
                 UART_SendMessage(msg);
             }
 
