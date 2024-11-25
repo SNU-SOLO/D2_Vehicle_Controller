@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include "stdbool.h"
 #include <string.h>
+#include <stdio.h> // for snprintf
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -246,8 +247,10 @@ int main(void)
   MX_TIM1_Init();
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
+
+  HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);  // Receive All data from RX FIFO0
   HAL_FDCAN_Start(&hfdcan1); // start over CAN
-  HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);  // RX ?��?��?��?�� ?��?��?��
+
   // RX int activate
 
   /* USER CODE END 2 */
@@ -274,7 +277,7 @@ int main(void)
   BSP_LED_On(LED_GREEN); // test code
 
   //start over velocity measurement
-  HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_1);
+  HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_2);
   printf("Starting velocity measurement...\r\n");
 
   //init PWM
@@ -293,6 +296,7 @@ int main(void)
     {
       /* USER CODE END WHILE */
       processCanMessages(); // transmit CAN messate to UART serial
+      HAL_Delay(100);
       /*// test code for PWM output
       setPWMDutyCycle(0);   // 0%
       HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);  // PA5 핀 토글
@@ -1303,14 +1307,14 @@ float getVelocity(void) {
 
 
 void initPWM(void) {
-	HAL_TIMEx_PWMN_Start(&htim1, TIM_CHANNEL_1);
+	HAL_TIMEx_PWMN_Start(&htim2, TIM_CHANNEL_2);   // init CH2_2 : CRUISE
 }
 
 void setPWMDutyCycle(uint16_t duty) {
 	if (duty > 100) duty = 100; 					     // set range duty
 
 	uint32_t pulse = (4999 * duty) / 100;			     // compare duty cycle
-	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pulse); // compare duty cycle
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pulse); // compare duty cycle
 }
 
 void UART_SendMessage(char *message) {
@@ -1323,9 +1327,9 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
     FDCAN_RxHeaderTypeDef rxHeader;
     uint8_t rxData[8];
 
-    // FDCAN 메시지 수신
+    // Receive CAN Message
     if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK) {
-        // 수신한 메시지를 버퍼에 저장
+        // Safe all meaasges into buffer
         if (canMessageCount < MAX_CAN_MESSAGES) {
             canMessages[canMessageCount].id = rxHeader.Identifier;
             canMessages[canMessageCount].dlc = rxHeader.DataLength >> 16;
@@ -1344,22 +1348,30 @@ void processCanMessages(void) {
         lastUartSendTime = currentTime;
 
         for (uint8_t i = 0; i < canMessageCount; i++) {
-            // �? CAN 메시�?�? UART�? 출력
-            char msg[100];
-            snprintf(msg, sizeof(msg), "CAN ID: 0x%X DLC: %d Data:", canMessages[i].id, canMessages[i].dlc);
-            HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+            char msg[128];
 
+            // 메시지 헤더 출력
+            snprintf(msg, sizeof(msg), "CAN ID: 0x%03lX, DLC: %d, Data:", canMessages[i].id, canMessages[i].dlc);
+            UART_SendMessage(msg);
+
+            // 데이터 출력
             for (uint8_t j = 0; j < canMessages[i].dlc; j++) {
                 snprintf(msg, sizeof(msg), " %02X", canMessages[i].data[j]);
-                HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+                UART_SendMessage(msg);
             }
 
-            snprintf(msg, sizeof(msg), "\r\n");
-            HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
-        }
+            // 메시지 끝에 줄 바꿈 추가
+            UART_SendMessage("\r\n");
 
-        // 메시�? 버퍼 초기?��
-        canMessageCount = 0;
+            // 메시지 삭제 후 나머지 당기기
+            for (uint8_t k = i; k < canMessageCount - 1; k++) {
+                canMessages[k] = canMessages[k + 1];
+            }
+
+            // 메시지 카운트 감소 및 인덱스 조정
+            canMessageCount--;
+            i--; // 현재 인덱스를 다시 처리
+        }
     }
 }
 
