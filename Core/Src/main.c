@@ -46,6 +46,7 @@ typedef struct {	// CanMessage
 } CANMessage;
 
 
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -195,7 +196,8 @@ void UART_SendMessage(char *message);						//UART print via VCP
 
 // CAN RX callback
 void processCanMessages(void);								// Rx FIFO0 CAN message
-
+// CAN error counter
+void printCanErrorCounters(void);
 
 /* USER CODE END PFP */
 
@@ -248,7 +250,8 @@ int main(void)
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 
-  HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);  // Receive All data from RX FIFO0
+  HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);  // Receive All data from RX FIFO0 인터럽트를 받게 하는 설정이고 -> CAN을 INTP 방식으로
+  // Filter 설정이 필요하다. 받을 CAN ID에 대한 필터 설정... 글로벌 필터
   HAL_FDCAN_Start(&hfdcan1); // start over CAN
 
   // RX int activate
@@ -296,8 +299,24 @@ int main(void)
   while (1)
     {
       /* USER CODE END WHILE */
-      processCanMessages(); // transmit CAN messate to UART serial
-      HAL_Delay(100);
+	    // CAN 에러 카운터와 상태 출력
+	    FDCAN_ErrorCountersTypeDef errorCounters;
+	    FDCAN_ProtocolStatusTypeDef protocolStatus;
+
+	    HAL_FDCAN_GetErrorCounters(&hfdcan1, &errorCounters);
+	    HAL_FDCAN_GetProtocolStatus(&hfdcan1, &protocolStatus);
+
+	    char msg[128];
+	    snprintf(msg, sizeof(msg),
+	             "RxErrorCnt: %d, TxErrorCnt: %d, LEC: %d\r\n",
+	             errorCounters.RxErrorCnt,
+	             errorCounters.TxErrorCnt,
+	             protocolStatus.LastErrorCode);
+	    UART_SendMessage(msg);
+
+	    processCanMessages();
+	    HAL_Delay(1000);
+
 
 
       /*// test code for PWM output
@@ -527,14 +546,34 @@ static void MX_FDCAN1_Init(void)
   hfdcan1.Init.DataSyncJumpWidth = 1;
   hfdcan1.Init.DataTimeSeg1 = 1;
   hfdcan1.Init.DataTimeSeg2 = 1;
-  hfdcan1.Init.StdFiltersNbr = 0;
+  //hfdcan1.Init.StdFiltersNbr = 0;
+  hfdcan1.Init.StdFiltersNbr = 1;
   hfdcan1.Init.ExtFiltersNbr = 0;
   hfdcan1.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
+
+
+
+
+// additional code
   if (HAL_FDCAN_Init(&hfdcan1) != HAL_OK)
   {
     Error_Handler();
   }
   /* USER CODE BEGIN FDCAN1_Init 2 */
+  FDCAN_FilterTypeDef sFilterConfig;
+  sFilterConfig.IdType = FDCAN_STANDARD_ID; // 표준 ID 사용
+  sFilterConfig.FilterIndex = 0;
+  sFilterConfig.FilterType = FDCAN_FILTER_MASK;
+  sFilterConfig.FilterConfig = FDCAN_FILTER_TO_RXFIFO0; // RX FIFO0로 메시지 수신
+  sFilterConfig.FilterID1 = 0x100; //
+  sFilterConfig.FilterID2 = 0x200; //
+
+  if (HAL_FDCAN_ConfigFilter(&hfdcan1, &sFilterConfig) != HAL_OK)
+  {
+      Error_Handler(); // 필터 설정 실패 시 에러 처리
+      UART_SendMessage("Filter Configuration Fail");
+  }
+
 
   /* USER CODE END FDCAN1_Init 2 */
 
@@ -1325,7 +1364,26 @@ void UART_SendMessage(char *message) {
 
 }
 
+void printCanErrorCounters(void) {
+    FDCAN_ErrorCountersTypeDef errorCounters;
+
+    if (HAL_FDCAN_GetErrorCounters(&hfdcan1, &errorCounters) == HAL_OK) {
+        char msg[128];
+        snprintf(msg, sizeof(msg),
+                 "TxErrorCount: %d, RxErrorCount: %d\r\n",
+                 errorCounters.TxErrorCnt,
+                 errorCounters.RxErrorCnt);
+        UART_SendMessage(msg);
+    } else {
+        UART_SendMessage("Error reading CAN error counters.\r\n");
+    }
+}
+
+
+
+
 //can message RX callback
+/*
 void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs) {
     FDCAN_RxHeaderTypeDef rxHeader;
     uint8_t rxData[8];
@@ -1338,6 +1396,24 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
             canMessages[canMessageCount].dlc = rxHeader.DataLength >> 16;
             memcpy(canMessages[canMessageCount].data, rxData, canMessages[canMessageCount].dlc);
             canMessageCount++;
+        }
+    }
+}
+*/
+
+void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs) {
+    FDCAN_RxHeaderTypeDef rxHeader;
+    uint8_t rxData[8];
+
+    if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK) {
+        if (canMessageCount < MAX_CAN_MESSAGES) {
+            canMessages[canMessageCount].id = rxHeader.Identifier;
+            canMessages[canMessageCount].dlc = rxHeader.DataLength >> 16;
+            memcpy(canMessages[canMessageCount].data, rxData, canMessages[canMessageCount].dlc);
+            canMessageCount++;
+        } else {
+            // 버퍼가 가득 찼을 때 처리
+            UART_SendMessage("CAN buffer full, dropping message\r\n");
         }
     }
 }
