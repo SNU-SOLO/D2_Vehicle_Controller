@@ -178,7 +178,7 @@ void handleCruiseDriveState(void);
 void stateMachineUpdate(void);
 
 // state transitions
-void changeVehcielState(VehicleState newState);			   // Func for State Machine transition
+void changeVehicleState(VehicleState newState);			   // Func for State Machine transition
 
 // detect button pushed event
 int isModeSwitchPushed(void);							   // Mode Switch Pushed event
