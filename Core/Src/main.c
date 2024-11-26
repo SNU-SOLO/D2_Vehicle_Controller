@@ -198,7 +198,6 @@ void UART_SendMessage(char *message);						//UART print via VCP
 void processCanMessages(void);								// Rx FIFO0 CAN message
 // CAN error counter
 void printCanErrorCounters(void);
-
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -305,17 +304,10 @@ int main(void)
 
 	    HAL_FDCAN_GetErrorCounters(&hfdcan1, &errorCounters);
 	    HAL_FDCAN_GetProtocolStatus(&hfdcan1, &protocolStatus);
-
-	    char msg[128];
-	    snprintf(msg, sizeof(msg),
-	             "RxErrorCnt: %d, TxErrorCnt: %d, LEC: %d\r\n",
-	             errorCounters.RxErrorCnt,
-	             errorCounters.TxErrorCnt,
-	             protocolStatus.LastErrorCode);
-	    UART_SendMessage(msg);
-
 	    processCanMessages();
 	    HAL_Delay(1000);
+
+
 
 
 
@@ -1386,16 +1378,21 @@ void printCanErrorCounters(void) {
 /*
 void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs) {
     FDCAN_RxHeaderTypeDef rxHeader;
-    uint8_t rxData[8];
+    uint8_t rxData[8];  // 최대 8바이트 데이터
 
-    // Receive CAN Message
     if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK) {
-        // Safe all meaasges into buffer
         if (canMessageCount < MAX_CAN_MESSAGES) {
             canMessages[canMessageCount].id = rxHeader.Identifier;
-            canMessages[canMessageCount].dlc = rxHeader.DataLength >> 16;
+
+
+            canMessages[canMessageCount].dlc = FDCAN_DLC_BYTES(rxHeader.DataLength);
+
+
             memcpy(canMessages[canMessageCount].data, rxData, canMessages[canMessageCount].dlc);
+
             canMessageCount++;
+        } else {
+            UART_SendMessage("CAN buffer full, dropping message\r\n");
         }
     }
 }
@@ -1408,18 +1405,29 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
     if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK) {
         if (canMessageCount < MAX_CAN_MESSAGES) {
             canMessages[canMessageCount].id = rxHeader.Identifier;
-            canMessages[canMessageCount].dlc = rxHeader.DataLength >> 16;
+
+            // DLC 변환 및 저장
+            //canMessages[canMessageCount].dlc = convertDLC(rxHeader.DataLength);
+            canMessages[canMessageCount].dlc = rxHeader.DataLength;
+
+            // 디버그 출력
+            char debugMsg[64];
+            snprintf(debugMsg, sizeof(debugMsg), "CAN ID: 0x%03lX, DLC: %d\r\n", canMessages[canMessageCount].id, canMessages[canMessageCount].dlc);
+            UART_SendMessage(debugMsg);
+
+            // 데이터 복사
             memcpy(canMessages[canMessageCount].data, rxData, canMessages[canMessageCount].dlc);
             canMessageCount++;
         } else {
-            // 버퍼가 가득 찼을 때 처리
             UART_SendMessage("CAN buffer full, dropping message\r\n");
         }
+    } else {
+        UART_SendMessage("Failed to get CAN message\r\n");
     }
 }
 
-
 ///can message to UART
+/*
 void processCanMessages(void) {
     uint32_t currentTime = HAL_GetTick();
 
@@ -1453,7 +1461,33 @@ void processCanMessages(void) {
         }
     }
 }
+*/
+void processCanMessages(void) {
+    uint32_t currentTime = HAL_GetTick();
 
+    if ((currentTime - lastUartSendTime) >= UART_SEND_INTERVAL) {
+        lastUartSendTime = currentTime;
+
+        for (uint8_t i = 0; i < canMessageCount; i++) {
+            char msg[128];
+
+            // CAN 메시지 헤더 출력
+            snprintf(msg, sizeof(msg), "CAN ID: 0x%03lX, DLC: %d, Data:", canMessages[i].id, canMessages[i].dlc);
+            UART_SendMessage(msg);
+
+            // 데이터 출력
+            for (uint8_t j = 0; j < canMessages[i].dlc; j++) {
+                snprintf(msg, sizeof(msg), " %02X", canMessages[i].data[j]);
+                UART_SendMessage(msg);
+            }
+
+            UART_SendMessage("\r\n");
+        }
+
+        // 메시지 초기화
+        canMessageCount = 0;
+    }
+}
 
 
 /* USER CODE END 4 */
