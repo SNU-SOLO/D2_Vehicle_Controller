@@ -183,6 +183,8 @@ void handleCruiseDriveState(void);
 
 // stateMachine Update
 void stateMachineUpdate(void);
+int isInitSuccess(void);
+
 
 // state transitions
 void changeVehicleState(VehicleState newState);			   // Func for State Machine transition
@@ -198,7 +200,7 @@ void initPWM(void);										   // init Acceleration volume
 void setPWMDutyCycle(uint16_t duty);					   // setPWMDutyCycle
 
 // serial print for debug
-void UART_SendMessage(char *message);						//UART print via VCP
+//void UART_SendMessage(char *message);						//UART print via VCP
 
 
 // CAN RX callback
@@ -261,8 +263,8 @@ int main(void)
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 
-  HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);  // Receive All data from RX FIFO0 ?��?��?��?���? 받게 ?��?�� ?��?��?���? -> CAN?�� INTP 방식?���?
-  // Filter ?��?��?�� ?��?��?��?��. 받을 CAN ID?�� ???�� ?��?�� ?��?��... �?로벌 ?��?��
+  // Activate FDCAN RX Interrupt for new message
+  HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);  // Receive All data from RX FIFO0
   HAL_FDCAN_Start(&hfdcan1); // start over CAN
 
   // RX int activate
@@ -284,23 +286,25 @@ int main(void)
   }
 
   /* USER CODE BEGIN BSP */
-  char msg[] = "Hello, This is Test Text \r\n"; //print test message to VCP
-  UART_SendMessage(msg);
+  printf("Initializing BSP\r\n");
 
   /* -- Sample board code to switch on led ---- */
   BSP_LED_On(LED_GREEN); // test code
 
   //start over velocity measurement
   HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_2);
-  printf("Starting velocity measurement...\r\n");
+  printf("Initializing Acc Volume... \r\n");
 
   //init PWM
   initPWM();							//Init for PWM duty
   setPWMDutyCycle(0);					// initial PWM Duty = 0%
+  printf("Set Acc Volume at 0");
 
   //init PWM to DC Output
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);		// switch on PWM Output Enable
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_SET);		// switch on MUX Select switch
+  printf("Acc Volume Gate On");
+
 
   /*
   	  	FDCAN_ErrorCountersTypeDef errorCounters;
@@ -311,9 +315,8 @@ int main(void)
 	    processCanMessages();
 	    HAL_Delay(1000);
    */
-
-
-
+  HAL_Delay(1000); // delay
+  print("Getting ready to operation");
 
   /* USER CODE END BSP */
 
@@ -323,11 +326,16 @@ int main(void)
     {
     /* USER CODE END WHILE */
 	// USART3에서 받은 데이터를 VCP로 전송
+
+
+	stateMachineUpdate();
+
+
 	if (HAL_UART_Transmit(&hcom_uart[COM1], usart3RxBuffer, RX_BUFFER_SIZE, HAL_MAX_DELAY) != HAL_OK) {
-	    UART_SendMessage("Failed to send data to VCP.\r\n");
+		printf("Failed to send data to VCP.\r\n");
 	}
 	processCanMessages();
-	HAL_Delay(100);  // 100ms 간격으로 전송
+	HAL_Delay(500);  //
 	setPWMDutyCycle(80);
 
 
@@ -558,7 +566,7 @@ static void MX_FDCAN1_Init(void)
   if (HAL_FDCAN_ConfigFilter(&hfdcan1, &sFilterConfig) != HAL_OK)
   {
       Error_Handler(); // ?��?�� ?��?�� ?��?�� ?�� ?��?�� 처리
-      UART_SendMessage("Filter Configuration Fail");
+      printf("Filter Configuration Fail");
   }
 
 
@@ -1263,7 +1271,7 @@ void changeVehicleState(VehicleState newState) {
     currentState = newState;
 }
 
-
+// dummy function
 void handlePowerOffState(void)
 {
 	// DO activity
@@ -1295,6 +1303,8 @@ void handleCruiseDriveState(void)
 	// DO activity
     ledBlinkInterval = LED_BLINK_INTERVAL_CRUISE_DRIVE;
 }
+
+//
 
 int isModeSwitchPushed(void) {				//button pushed event detection
     uint32_t currentTime = HAL_GetTick();  // get current time
@@ -1337,21 +1347,18 @@ float getVelocity(void) {
     return velocity;
 }
 
-
+// init PWM for acc volume
 void initPWM(void) {
 	HAL_TIMEx_PWMN_Start(&htim2, TIM_CHANNEL_2);   // init CH2_2 : CRUISE
 }
 
+
+// set PWM dutycycle
 void setPWMDutyCycle(uint16_t duty) {
 	if (duty > 100) duty = 100; 					     // set range duty
 
 	uint32_t pulse = (4999 * duty) / 100;			     // compare duty cycle
 	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, pulse); // compare duty cycle
-}
-
-void UART_SendMessage(char *message) {
-    HAL_UART_Transmit(&hcom_uart[COM1], (uint8_t*)message, strlen(message), HAL_MAX_DELAY);
-
 }
 
 
@@ -1364,138 +1371,80 @@ void printCanErrorCounters(void) {
                  "TxErrorCount: %d, RxErrorCount: %d\r\n",
                  errorCounters.TxErrorCnt,
                  errorCounters.RxErrorCnt);
-        UART_SendMessage(msg);
+        printf(msg);
     } else {
-        UART_SendMessage("Error reading CAN error counters.\r\n");
+        Printf("Error reading CAN error counters.\r\n");
     }
 }
 
 
 
-
-//can message RX callback
-/*
+// FDCAN Rx Interrupt Callback
 void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs) {
-    FDCAN_RxHeaderTypeDef rxHeader;
-    uint8_t rxData[8];  // 최�? 8바이?�� ?��?��?��
+    FDCAN_RxHeaderTypeDef rxHeader;  // rdHeadr
+    uint8_t rxData[8];				 // rxdata : lengh is 8 Byte
 
-    if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK) {
-        if (canMessageCount < MAX_CAN_MESSAGES) {
-            canMessages[canMessageCount].id = rxHeader.Identifier;
+    if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK) {	// getRX mdssage , HAL OK
+        if (canMessageCount < MAX_CAN_MESSAGES) {										//
+            canMessages[canMessageCount].id = rxHeader.Identifier;						// CAN ID
 
+            canMessages[canMessageCount].dlc = rxHeader.DataLength;						// parse DataLength
 
-            canMessages[canMessageCount].dlc = FDCAN_DLC_BYTES(rxHeader.DataLength);
-
-
-            memcpy(canMessages[canMessageCount].data, rxData, canMessages[canMessageCount].dlc);
-
-            canMessageCount++;
+            memcpy(canMessages[canMessageCount].data, rxData, canMessages[canMessageCount].dlc);	 // copy memory to
+            canMessageCount++;														    // increase can message count
         } else {
-            UART_SendMessage("CAN buffer full, dropping message\r\n");
-        }
-    }
-}
-*/
-
-void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs) {
-    FDCAN_RxHeaderTypeDef rxHeader;
-    uint8_t rxData[8];
-
-    if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxHeader, rxData) == HAL_OK) {
-        if (canMessageCount < MAX_CAN_MESSAGES) {
-            canMessages[canMessageCount].id = rxHeader.Identifier;
-
-            // DLC �??�� �? ???��
-            //canMessages[canMessageCount].dlc = convertDLC(rxHeader.DataLength);
-            canMessages[canMessageCount].dlc = rxHeader.DataLength;
-
-            // ?��버그 출력
-            char debugMsg[64];
-            snprintf(debugMsg, sizeof(debugMsg), "RxEvent . CAN ID: 0x%03lX, DLC: %d\r\n", canMessages[canMessageCount].id, canMessages[canMessageCount].dlc);
-            UART_SendMessage(debugMsg);
-
-            // ?��?��?�� 복사
-            memcpy(canMessages[canMessageCount].data, rxData, canMessages[canMessageCount].dlc);
-            canMessageCount++;
-        } else {
-            UART_SendMessage("CAN buffer full, dropping message\r\n");
+            printf("CAN buffer full, dropping message\r\n");
         }
     } else {
-        UART_SendMessage("Failed to get CAN message\r\n");
+        printf("Failed to get CAN message\r\n");
     }
 }
 
-///can message to UART
-/*
-void processCanMessages(void) {
+//CAN message process
+void processCanMessages(void) {															// printout can message
     uint32_t currentTime = HAL_GetTick();
 
-    if ((currentTime - lastUartSendTime) >= UART_SEND_INTERVAL) {
-        lastUartSendTime = currentTime;
+    if ((currentTime - lastUartSendTime) >= UART_SEND_INTERVAL) {					    // print out, UART_Send Interval
+        lastUartSendTime = currentTime;													// update last time
 
-        for (uint8_t i = 0; i < canMessageCount; i++) {
-            char msg[128];
+        for (uint8_t i = 0; i < canMessageCount; i++) {								    // for Messages in the FIFO
+            char msg[128];															    // message length is 128 This is for debugging
 
-            // 메시�? ?��?�� 출력
-            snprintf(msg, sizeof(msg), "CAN ID: 0x%03lX, DLC: %d, Data:", canMessages[i].id, canMessages[i].dlc); // Data formatting
-            UART_SendMessage(msg);
-
-            // ?��?��?�� 출력
-            for (uint8_t j = 0; j < canMessages[i].dlc; j++) {
-                snprintf(msg, sizeof(msg), " %02X", canMessages[i].data[j]);			// data formatting : msg, size,
-                UART_SendMessage(msg);
-            }
-
-            // 메시�? ?��?�� �? 바꿈 추�?
-            UART_SendMessage("\r\n");
-
-            // 메시�? ?��?�� ?�� ?��머�? ?��기기
-            for (uint8_t k = i; k < canMessageCount - 1; k++) {
-                canMessages[k] = canMessages[k + 1];
-            }
-
-            // 메시�? 카운?�� 감소 �? ?��?��?�� 조정
-            canMessageCount--;
-            i--; // ?��?�� ?��?��?���? ?��?�� 처리
-        }
-    }
-}
-*/
-void processCanMessages(void) {
-    uint32_t currentTime = HAL_GetTick();
-
-    if ((currentTime - lastUartSendTime) >= UART_SEND_INTERVAL) {
-        lastUartSendTime = currentTime;
-
-        for (uint8_t i = 0; i < canMessageCount; i++) {
-            char msg[128];
-
-            // CAN 메시�? ?��?�� 출력
-            snprintf(msg, sizeof(msg), "Message in the buffer. CAN ID: 0x%03lX, DLC: %d, Data:", canMessages[i].id, canMessages[i].dlc);
-            UART_SendMessage(msg);
+            // Printout CAN message
+            snprintf(msg, sizeof(msg), "Message in the buffer : CAN ID: 0x%03lX, DLC: %d, Data:", canMessages[i].id, canMessages[i].dlc); // CAN ID, DLC and
+            printf(msg);
 
             // ?��?��?�� 출력
-            for (uint8_t j = 0; j < canMessages[i].dlc; j++) {
+            for (uint8_t j = 0; j < canMessages[i].dlc; j++) {							// print out CAN data, dlc length is 8 Byte
                 snprintf(msg, sizeof(msg), " %02X", canMessages[i].data[j]);
-                UART_SendMessage(msg);
+                printf(msg);
             }
 
-            UART_SendMessage("\r\n");
+            printf("\r\n");
         }
 
-        // 메시�? 초기?��
-        canMessageCount = 0;
+        canMessageCount = 0;															// Reset canMessageCount pointer
     }
 }
 
 
+// UART RX callback
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
     if (huart->Instance == USART3) {  // USART3에서 수신 완료
         // 수신된 데이터를 VCP로 전송
-        HAL_UART_Transmit(&hcom_uart[COM1], usart3RxBuffer, RX_BUFFER_SIZE, HAL_MAX_DELAY);
+        HAL_UART_Transmit(&hcom_uart[COM1], usart3RxBuffer, RX_BUFFER_SIZE, HAL_MAX_DELAY); // echo back to VCP printout channel
     }
 }
 
+// dummy function
+int isInitSuccess(void) {
+    // Replace this with the actual condition to check initialization success
+    if (1) { // 1 is treated as TRUE in C
+        return 1; // Initialization success
+    } else {
+        return 0; // Initialization failure
+    }
+}
 
 
 
