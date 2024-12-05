@@ -145,7 +145,7 @@ uint8_t vcpTxBuffer[RX_BUFFER_SIZE];      // VCP TX 데이터 버퍼
 
 // test variable
 uint8_t xTest = 0;
-
+uint8_t testData[8] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};
 
 /* USER CODE END PV */
 
@@ -205,6 +205,7 @@ void setPWMDutyCycle(uint16_t duty);					   // setPWMDutyCycle
 
 // CAN RX callback
 void processCanMessages(void);								// Rx FIFO0 CAN message
+void CAN_TxMessage(uint32_t id, uint8_t dlc, uint8_t *data); // Call Tx message
 // CAN error counter
 void printCanErrorCounters(void);
 
@@ -340,6 +341,9 @@ int main(void)
 		printf("Failed to send data to VCP.\r\n");
 	}
 	processCanMessages();
+
+	CAN_TxMessage(0x300, 8, testData);
+
 	HAL_Delay(500);  //
 	setPWMDutyCycle(80);
 
@@ -561,12 +565,12 @@ static void MX_FDCAN1_Init(void)
   }
   /* USER CODE BEGIN FDCAN1_Init 2 */
   FDCAN_FilterTypeDef sFilterConfig;
-  sFilterConfig.IdType = FDCAN_STANDARD_ID; // ?���? ID ?��?��
+  sFilterConfig.IdType = FDCAN_STANDARD_ID; // STD
   sFilterConfig.FilterIndex = 0;
-  sFilterConfig.FilterType = FDCAN_FILTER_MASK;
-  sFilterConfig.FilterConfig = FDCAN_FILTER_TO_RXFIFO0; // RX FIFO0�? 메시�? ?��?��
-  sFilterConfig.FilterID1 = 0x100; //
-  sFilterConfig.FilterID2 = 0x200; //
+  sFilterConfig.FilterType = FDCAN_FILTER_RANGE_NO_EIDM;
+  sFilterConfig.FilterConfig = FDCAN_FILTER_TO_RXFIFO0; // RX FIFO0
+  sFilterConfig.FilterID1 = 0x100; 					//
+  sFilterConfig.FilterID2 = 0x200; 						//
 
   if (HAL_FDCAN_ConfigFilter(&hfdcan1, &sFilterConfig) != HAL_OK)
   {
@@ -1402,6 +1406,48 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
         }
     } else {
         printf("Failed to get CAN message\r\n");
+    }
+}
+
+
+void CAN_TxMessage(uint32_t id, uint8_t dlc, uint8_t *data) {
+    FDCAN_TxHeaderTypeDef txHeader;
+    HAL_StatusTypeDef txStatus;
+    // verify DLC
+    if (dlc >8){
+    	printf("Invalid DLC value.\r\n");
+    	return;
+    }
+
+    if (data==NULL) {
+    	printf("Data pointer is NULL\r\n");
+    	return;
+    }
+
+    if (HAL_FDCAN_GetTxFifoFreeLevel(&hfdcan1)==0){
+    	printf("Tx FIFO is full. \r\n");
+    	return;
+    }
+
+
+
+    // Configure the TxHeader
+    txHeader.Identifier = id;                        // CAN ID
+    txHeader.IdType = FDCAN_STANDARD_ID;             // Standard ID
+    txHeader.TxFrameType = FDCAN_DATA_FRAME;         // Data frame
+    txHeader.DataLength = FDCAN_DLC_BYTES_8;                 // DLC 8 Byte
+    txHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE; // Err
+    txHeader.BitRateSwitch = FDCAN_BRS_OFF;          // bitrate
+    txHeader.FDFormat = FDCAN_CLASSIC_CAN;           // Classic format
+    txHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS; // no tex event
+    txHeader.MessageMarker = 0;                      // no marker
+
+    // Send CAN message
+    txStatus = HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &txHeader, data);
+    if (txStatus == HAL_OK) {
+        printf("CAN message transmitted successfully.\r\n");
+    } else {
+        printf("Failed to transmit CAN message.\r\n");
     }
 }
 
