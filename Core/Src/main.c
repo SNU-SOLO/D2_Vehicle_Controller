@@ -248,7 +248,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_DMA_Init();
+
   MX_ADC1_Init();
   MX_ADC2_Init();
   MX_FDCAN1_Init();
@@ -258,15 +258,11 @@ int main(void)
   MX_UART4_Init();
   MX_UART5_Init();
   MX_USART1_UART_Init();
-  MX_USART3_UART_Init();
   MX_TIM1_Init();
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 
   // Activate FDCAN RX Interrupt for new message
-  HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);  // Receive All data from RX FIFO0
-  HAL_FDCAN_Start(&hfdcan1); // start over CAN
-
   // RX int activate
 
   /* USER CODE END 2 */
@@ -298,12 +294,12 @@ int main(void)
   //init PWM
   initPWM();							//Init for PWM duty
   setPWMDutyCycle(0);					// initial PWM Duty = 0%
-  printf("Set Acc Volume at 0");
+  printf("Set Acc Volume at 0 \r\n");
 
   //init PWM to DC Output
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);		// switch on PWM Output Enable
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_15, GPIO_PIN_SET);		// switch on MUX Select switch
-  printf("Acc Volume Gate On");
+  printf("Acc Volume Gate On \r\n");
 
 
   /*
@@ -315,9 +311,18 @@ int main(void)
 	    processCanMessages();
 	    HAL_Delay(1000);
    */
-  HAL_Delay(1000); // delay
-  print("Getting ready to operation");
-
+  HAL_Delay(200); // delay
+  printf("Getting ready to operation \r\n");
+  HAL_Delay(200);
+  printf("Initialize FDCAN1 \r\n");
+  HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);  // Receive All data from RX FIFO0
+  HAL_FDCAN_Start(&hfdcan1); // start over CAN
+  HAL_Delay(200);
+  // Start over GNSS Data Streaming
+  MX_DMA_Init(); // Init DMA
+  printf("Initialize GNSS UART data streaming \r\n");
+  MX_USART3_UART_Init();
+  HAL_Delay(200);
   /* USER CODE END BSP */
 
   /* Infinite loop */
